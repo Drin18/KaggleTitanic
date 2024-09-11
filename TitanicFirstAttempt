@@ -1,0 +1,156 @@
+import numpy as np
+import pandas as pd
+import tensorflow as tf
+from tensorflow import keras
+from tensorflow.keras import layers
+from sklearn.preprocessing import OneHotEncoder
+import matplotlib.pyplot as plt
+
+import os
+for dirname, _, filenames in os.walk('/kaggle/input'):
+    for filename in filenames:
+        print(os.path.join(dirname, filename))
+
+# Load the data
+train_data = pd.read_csv("/kaggle/input/titanic/train.csv")
+test_data = pd.read_csv("/kaggle/input/titanic/test.csv")
+
+
+# Define your input features
+selected_columns = train_data[['Pclass', 'Sex', 'Age', 'SibSp', 'Parch', 'Fare', 'Embarked', 'Ticket']].copy()
+labels = train_data[['Survived']]
+
+# Handle missing values
+selected_columns.loc[:, 'Age'] = selected_columns['Age'].fillna(selected_columns['Age'].median())
+selected_columns.loc[:, 'Embarked'] = selected_columns['Embarked'].fillna(selected_columns['Embarked'].mode()[0])
+test_data.loc[:, 'Age'] = test_data['Age'].fillna(test_data['Age'].median())
+test_data.loc[:, 'Embarked'] = test_data['Embarked'].fillna(test_data['Embarked'].mode()[0])
+
+# Extract ticket prefixes
+selected_columns.loc[:, 'TicketPrefix'] = selected_columns['Ticket'].apply(lambda x: x.split()[0] if len(x.split()) > 1 else 'NoPrefix')
+test_data.loc[:, 'TicketPrefix'] = test_data['Ticket'].apply(lambda x: x.split()[0] if len(x.split()) > 1 else 'NoPrefix')
+
+# Ensure consistency in ticket prefixes between train and test data
+unique_ticket_prefixes = selected_columns['TicketPrefix'].unique()
+selected_columns['TicketPrefix'] = selected_columns['TicketPrefix'].apply(lambda x: x if x in unique_ticket_prefixes else 'Other')
+test_data['TicketPrefix'] = test_data['TicketPrefix'].apply(lambda x: x if x in unique_ticket_prefixes else 'Other')
+
+# Binning Features
+# Binning Age
+selected_columns.loc[:, 'AgeBin'] = pd.cut(selected_columns['Age'], bins=[0, 2, 12, 19, 35, 60, np.inf], labels=['Infant', 'Child', 'Teenager', 'Young Adult', 'Adult', 'Senior'])
+test_data.loc[:, 'AgeBin'] = pd.cut(test_data['Age'], bins=[0, 2, 12, 19, 35, 60, np.inf], labels=['Infant', 'Child', 'Teenager', 'Young Adult', 'Adult', 'Senior'])
+
+# Binning Fare
+selected_columns.loc[:, 'FareBin'] = pd.cut(selected_columns['Fare'], bins=[0, 25, 50, 100, np.inf], labels=['Low Fare', 'Medium Fare', 'High Fare', 'Very High Fare'])
+test_data.loc[:, 'FareBin'] = pd.cut(test_data['Fare'], bins=[0, 25, 50, 100, np.inf], labels=['Low Fare', 'Medium Fare', 'High Fare', 'Very High Fare'])
+
+# Binning SibSp
+selected_columns.loc[:, 'SibSpBin'] = pd.cut(selected_columns['SibSp'], bins=[0, 1, 2, 3, np.inf], labels=['0', '1', '2', '3+'])
+test_data.loc[:, 'SibSpBin'] = pd.cut(test_data['SibSp'], bins=[0, 1, 2, 3, np.inf], labels=['0', '1', '2', '3+'])
+
+# Binning Parch
+selected_columns.loc[:, 'ParchBin'] = pd.cut(selected_columns['Parch'], bins=[0, 1, 2, 3, np.inf], labels=['0', '1', '2', '3+'])
+test_data.loc[:, 'ParchBin'] = pd.cut(test_data['Parch'], bins=[0, 1, 2, 3, np.inf], labels=['0', '1', '2', '3+'])
+# One-Hot Encoding for categorical features
+sex_encoder = OneHotEncoder(sparse_output=False)
+embarked_encoder = OneHotEncoder(sparse_output=False)
+pclass_encoder = OneHotEncoder(sparse_output=False)
+ticket_prefix_encoder = OneHotEncoder(sparse_output=False)
+age_bin_encoder = OneHotEncoder(sparse_output=False)
+fare_bin_encoder = OneHotEncoder(sparse_output=False)
+sibsp_bin_encoder = OneHotEncoder(sparse_output=False)
+parch_bin_encoder = OneHotEncoder(sparse_output=False)
+
+encoded_sex = sex_encoder.fit_transform(selected_columns[['Sex']])
+encoded_embarked = embarked_encoder.fit_transform(selected_columns[['Embarked']])
+encoded_pclass = pclass_encoder.fit_transform(selected_columns[['Pclass']])
+encoded_ticket_prefix = ticket_prefix_encoder.fit_transform(selected_columns[['TicketPrefix']])
+encoded_age_bin = age_bin_encoder.fit_transform(selected_columns[['AgeBin']])
+encoded_fare_bin = fare_bin_encoder.fit_transform(selected_columns[['FareBin']])
+encoded_sibsp_bin = sibsp_bin_encoder.fit_transform(selected_columns[['SibSpBin']])
+encoded_parch_bin = parch_bin_encoder.fit_transform(selected_columns[['ParchBin']])
+# Combine the encoded features with the rest of the dataset
+encoded_features = np.hstack([encoded_sex, encoded_embarked, encoded_pclass, encoded_ticket_prefix, encoded_age_bin, encoded_fare_bin, encoded_sibsp_bin, encoded_parch_bin])
+numerical_features = selected_columns[['Fare']].values  # Only 'Fare' remains as a numerical feature
+selected_columns_transformed = np.hstack([numerical_features, encoded_features])
+# Convert to TensorFlow tensor
+selected_columns_tensor = tf.convert_to_tensor(selected_columns_transformed, dtype=tf.float32)
+labels_tensor = tf.convert_to_tensor(labels.values, dtype=tf.float32)
+# Define the model with dropout layers
+model = keras.Sequential([
+    keras.Input(shape=(selected_columns_tensor.shape[1],)),
+    layers.Dense(64, activation='relu'),
+    layers.Dropout(0.5),
+    layers.Dense(32, activation='relu'),
+    layers.Dropout(0.5),
+    layers.Dense(16, activation = 'relu'),
+    layers.Dropout(0.5),
+    layers.Dense(10, activation = 'relu'),
+    layers.Dropout(0.5),
+    layers.Dense(10, activation = 'relu'),
+    layers.Dense(1, activation='sigmoid')
+])
+# Compile the model with a different optimizer
+model.compile(optimizer=keras.optimizers.Adam(learning_rate=0.001),
+              loss='binary_crossentropy',
+              metrics=['accuracy'])
+# Train the model
+history = model.fit(selected_columns_tensor, labels_tensor, epochs=600, batch_size=32, validation_split=0.02)
+
+# Plot accuracy
+plt.plot(history.history['accuracy'], label='accuracy')
+plt.plot(history.history['val_accuracy'], label = 'val_accuracy')
+plt.xlabel('Epoch')
+plt.ylabel('Accuracy')
+plt.ylim([0, 1])
+plt.legend(loc='lower right')
+plt.show()
+
+print(train_data.columns)
+Index(['PassengerId', 'Survived', 'Pclass', 'Name', 'Sex', 'Age', 'SibSp',
+       'Parch', 'Ticket', 'Fare', 'Cabin', 'Embarked'],
+      dtype='object')
+from sklearn.preprocessing import OneHotEncoder
+import numpy as np
+
+# Initialize the OneHotEncoder with handle_unknown='ignore'
+ticket_prefix_encoder = OneHotEncoder(handle_unknown='ignore')
+ticket_prefix_encoder.fit(selected_columns[['TicketPrefix']])
+
+# Apply the transformations to the test data
+test_data['Age'] = test_data['Age'].fillna(test_data['Age'].median())
+test_data['Embarked'] = test_data['Embarked'].fillna(test_data['Embarked'].mode()[0])
+
+encoded_sex_test = sex_encoder.transform(test_data[['Sex']])
+encoded_embarked_test = embarked_encoder.transform(test_data[['Embarked']])
+encoded_pclass_test = pclass_encoder.transform(test_data[['Pclass']])
+encoded_ticket_prefix_test = ticket_prefix_encoder.transform(test_data[['TicketPrefix']])
+encoded_age_bin_test = age_bin_encoder.transform(test_data[['AgeBin']])
+encoded_fare_bin_test = fare_bin_encoder.transform(test_data[['FareBin']])
+encoded_sibsp_bin_test = sibsp_bin_encoder.transform(test_data[['SibSpBin']])
+encoded_parch_bin_test = parch_bin_encoder.transform(test_data[['ParchBin']])
+
+# Ensure all arrays have the same number of dimensions
+encoded_ticket_prefix_test = encoded_ticket_prefix_test.toarray()  # Convert sparse matrix to dense array if necessary
+
+encoded_features_test = np.hstack([encoded_sex_test, encoded_embarked_test, encoded_pclass_test, encoded_ticket_prefix_test, encoded_age_bin_test, encoded_fare_bin_test, encoded_sibsp_bin_test, encoded_parch_bin_test])
+numerical_features_test = test_data[['Fare']].values  # Only 'Fare' remains as a numerical feature
+test_data_transformed = np.hstack([numerical_features_test, encoded_features_test])
+
+# Convert to TensorFlow tensor
+test_data_tensor = tf.convert_to_tensor(test_data_transformed, dtype=tf.float32)
+
+# Make predictions on the test set
+predictions = model.predict(test_data_tensor)
+predictions = (predictions > 0.5).astype(int).flatten()
+
+# Create submission DataFrame
+
+submission = pd.DataFrame({
+    'PassengerId': test_data['PassengerId'],
+    'Survived': predictions
+})
+
+# Save the Submission File:
+
+submission.to_csv('submission.csv', index=False)
